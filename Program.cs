@@ -9,9 +9,6 @@ var config = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-var iisSiteName = config["Deployment:IisSiteName"] ?? "Default Web Site";
-var iisPhysicalPath = config["Deployment:IisPhysicalPath"] ?? @"C:\\inetpub\\wwwroot";
-var localZipPath = config["Deployment:LocalZipPath"];
 var localBackupDir = config["Deployment:LocalBackupDir"] ?? Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "backups");
 Directory.CreateDirectory(localBackupDir);
 
@@ -37,36 +34,23 @@ string PromptRequired(string label)
     }
 }
 
-// Allow adjusting IIS target interactively
-Log.Step("Configure IIS target");
-var prevSite = iisSiteName; var prevPath = iisPhysicalPath;
-iisSiteName = PromptWithDefault("IIS site name", iisSiteName);
-iisPhysicalPath = PromptWithDefault("IIS physical path", iisPhysicalPath);
-if (!string.Equals(prevSite, iisSiteName, StringComparison.Ordinal) || !string.Equals(prevPath, iisPhysicalPath, StringComparison.Ordinal))
-{
-    Log.Info($"Target set to site='{iisSiteName}', path='{iisPhysicalPath}'");
-}
-
-// Resolve package zip
-Log.Step("Resolve package zip");
-string? packageZipPath = null;
-
-// 1) Try Artifact API, allow filling via console
+// Get deployment info from API
+Log.Step("Get deployment configuration from API");
 var apiBase = config["ArtifactApi:BaseUrl"];
-var apiTerminalId = config["ArtifactApi:TerminalId"];
-var apiZipName = config["ArtifactApi:ZipName"] ?? config["ArtifactApi:Tag"]; // backward compatible
-
-// Always use Artifact API; BaseUrl can default, Terminal ID and Zip are required from console
 apiBase = PromptWithDefault("API BaseUrl", apiBase);
-apiTerminalId = PromptRequired("Terminal ID");
-apiZipName = PromptRequired("Zip name (without .zip okay)");
+var apiTerminalId = PromptRequired("Terminal ID");
+var apiZipName = PromptRequired("Zip name (without .zip okay)");
+
+string? packageZipPath = null;
+string? iisSiteName = null;
+string? iisPhysicalPath = null;
 
 if (!string.IsNullOrWhiteSpace(apiBase) && !string.IsNullOrWhiteSpace(apiTerminalId) && !string.IsNullOrWhiteSpace(apiZipName))
 {
     try
     {
         var apiUrl = $"{apiBase.TrimEnd('/')}/artifacts/{apiTerminalId}/{apiZipName}";
-        Log.Info($"Downloading package from API: {apiUrl}");
+        Log.Info($"Getting deployment info from API: {apiUrl}");
         using var http = new HttpClient();
         using var resp = await http.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead);
         if (!resp.IsSuccessStatusCode)
@@ -74,27 +58,34 @@ if (!string.IsNullOrWhiteSpace(apiBase) && !string.IsNullOrWhiteSpace(apiTermina
             Log.Error($"API returned {(int)resp.StatusCode} {resp.ReasonPhrase}. Cannot continue.");
             return;
         }
-        else
+        
+        // Get IIS configuration from response headers
+        if (resp.Headers.TryGetValues("X-IIS-SiteName", out var siteNameValues))
+            iisSiteName = siteNameValues.FirstOrDefault();
+        if (resp.Headers.TryGetValues("X-IIS-PhysicalPath", out var pathValues))
+            iisPhysicalPath = pathValues.FirstOrDefault();
+            
+        Log.Info($"IIS Site: {iisSiteName ?? "Not provided"}");
+        Log.Info($"IIS Path: {iisPhysicalPath ?? "Not provided"}");
+        
+        var tempZip = Path.Combine(Path.GetTempPath(), $"deployer_{Guid.NewGuid():N}.zip");
+        await using (var fs = File.Create(tempZip))
         {
-            var tempZip = Path.Combine(Path.GetTempPath(), $"deployer_{Guid.NewGuid():N}.zip");
-            await using (var fs = File.Create(tempZip))
-            {
-                await resp.Content.CopyToAsync(fs);
-            }
-            packageZipPath = tempZip;
-            Log.Ok($"Downloaded package to: {tempZip}");
+            await resp.Content.CopyToAsync(fs);
         }
+        packageZipPath = tempZip;
+        Log.Ok($"Downloaded package to: {tempZip}");
     }
     catch (Exception ex)
     {
-        Log.Warn($"Failed to download from API: {ex.Message}");
+        Log.Error($"Failed to get deployment info from API: {ex.Message}");
+        return;
     }
 }
 
-// Require package from API only
-if (packageZipPath is null)
+if (packageZipPath is null || string.IsNullOrWhiteSpace(iisSiteName) || string.IsNullOrWhiteSpace(iisPhysicalPath))
 {
-    Log.Error("Failed to obtain package from API. Aborting.");
+    Log.Error("Failed to obtain complete deployment configuration from API. Aborting.");
     return;
 }
 
