@@ -1,3 +1,4 @@
+using Microsoft.OpenApi.Models;
 using System.Text.RegularExpressions;
 
 namespace TerminalArtifactApi;
@@ -8,12 +9,23 @@ public class Program
     {
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddEndpointsApiExplorer();
-        builder.Services.AddSwaggerGen();
-
+        builder.Services.AddSwaggerGen(c =>
+        {
+            c.SwaggerDoc("v1", new OpenApiInfo
+            {
+                Title = "Terminal Artifact API",
+                Description = "API for downloading terminal deployment artifacts",
+                Version = "v1"
+            });
+        });
         var app = builder.Build();
 
         app.UseSwagger();
-        app.UseSwaggerUI();
+        app.UseSwaggerUI(c =>
+        {
+            c.SwaggerEndpoint("/swagger/v1/swagger.json", "Terminal Artifact API v1");
+            c.RoutePrefix = string.Empty; // Serve Swagger UI at root
+        });
 
         app.MapGet("/artifacts/{terminalId}/{zipName}", (string terminalId, string zipName) =>
         {
@@ -45,7 +57,14 @@ public class Program
             }
         })
         .WithName("GetArtifactZip")
-        .WithOpenApi();
+        .WithSummary("Download terminal artifact")
+        .WithDescription("Downloads a zip file artifact for the specified terminal")
+        .WithOpenApi(operation =>
+        {
+            operation.Parameters[0].Description = "Terminal identifier";
+            operation.Parameters[1].Description = "Zip file name (with or without .zip extension)";
+            return operation;
+        });
 
         app.Run();
     }
