@@ -1,0 +1,24 @@
+# .NET
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Visual Studio
+.vs/
+TestResults/
+*.ncrunch*
+*.LocalHistory/
+
+# Rider
+.idea/
+*.sln.iml
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
