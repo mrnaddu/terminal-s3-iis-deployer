@@ -1,7 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using System.Diagnostics;
 using System.IO.Compression;
-using System.Net.Http;
 
 var config = new ConfigurationBuilder()
     .SetBasePath(Directory.GetCurrentDirectory())
