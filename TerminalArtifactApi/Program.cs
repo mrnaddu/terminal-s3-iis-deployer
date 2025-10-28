@@ -24,7 +24,7 @@ public class Program
         app.UseSwaggerUI(c =>
         {
             c.SwaggerEndpoint("/swagger/v1/swagger.json", "Terminal Artifact API v1");
-            c.RoutePrefix = string.Empty; // Serve Swagger UI at root
+            c.RoutePrefix = string.Empty;
         });
 
         app.MapGet("/artifacts/{terminalId}/{zipName}", (string terminalId, string zipName) =>
