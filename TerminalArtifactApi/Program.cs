@@ -22,7 +22,8 @@ static bool IsValidSegment(string value)
     => !string.IsNullOrWhiteSpace(value) && Regex.IsMatch(value, "^[A-Za-z0-9._-]+$");
 
 // GET /artifacts/{terminalId}/{tag}
-// Returns a zip file either by picking up an existing zip or zipping the tag folder on-the-fly.
+// tag is the zip file name (without .zip) under Artifacts:Root
+// terminalId is the folder inside that zip; API returns a zip containing ONLY that terminal folder's contents.
 app.MapGet("/artifacts/{terminalId}/{tag}", async (HttpContext http, string terminalId, string tag) =>
 {
     try
@@ -38,33 +39,43 @@ app.MapGet("/artifacts/{terminalId}/{tag}", async (HttpContext http, string term
             return Results.Problem("Artifacts root is not configured. Set Artifacts:Root in appsettings.", statusCode: 500);
         }
 
-        // Ensure base and terminal folders exist
         Directory.CreateDirectory(artifactsRoot);
-        var terminalDir = Path.Combine(artifactsRoot, terminalId);
-        if (!Directory.Exists(terminalDir))
+        var sourceZip = Path.Combine(artifactsRoot, $"{tag}.zip");
+        if (!File.Exists(sourceZip))
         {
-            Directory.CreateDirectory(terminalDir);
-            return Results.NotFound($"Terminal folder created at '{terminalDir}'. Upload artifacts and retry.");
+            return Results.NotFound($"Source zip not found: {sourceZip}");
         }
 
-        var existingZip = Path.Combine(terminalDir, $"{tag}.zip");
-        if (File.Exists(existingZip))
-        {
-            var stream = File.Open(existingZip, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-            var fileName = $"{terminalId}-{tag}.zip";
-            return Results.File(stream, "application/zip", fileName, enableRangeProcessing: true);
-        }
-
-        var tagFolder = Path.Combine(terminalDir, tag);
-        if (!Directory.Exists(tagFolder))
-        {
-            Directory.CreateDirectory(tagFolder);
-            return Results.NotFound($"Tag folder created at '{tagFolder}'. Place files there or provide '{tag}.zip' and retry.");
-        }
-
-        // Create a temp zip and stream it back; ensure cleanup after response completes.
+        // Build a new zip containing only the entries under the terminalId folder within the source zip
         var tempZip = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid()}.zip");
-        ZipFile.CreateFromDirectory(tagFolder, tempZip, CompressionLevel.Optimal, includeBaseDirectory: false);
+        var prefix = terminalId.TrimEnd('/') + "/";
+
+        using (var src = ZipFile.OpenRead(sourceZip))
+        using (var outStream = File.Create(tempZip))
+        using (var dest = new ZipArchive(outStream, ZipArchiveMode.Create, leaveOpen: false))
+        {
+            var matched = false;
+            foreach (var entry in src.Entries)
+            {
+                var name = entry.FullName.Replace('\\', '/');
+                if (!name.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                if (name.EndsWith("/")) { matched = true; continue; } // directory placeholder
+                var relPath = name.Substring(prefix.Length);
+                if (string.IsNullOrEmpty(relPath) || relPath.EndsWith("/")) { matched = true; continue; }
+
+                var newEntry = dest.CreateEntry(relPath, CompressionLevel.Optimal);
+                await using var srcStream = entry.Open();
+                await using var newStream = newEntry.Open();
+                await srcStream.CopyToAsync(newStream);
+                matched = true;
+            }
+
+            if (!matched)
+            {
+                // No entries found for terminal folder
+                return Results.NotFound($"Folder '{terminalId}' not found inside zip '{tag}.zip'.");
+            }
+        }
 
         http.Response.RegisterForDispose(new TempFileDeleter(tempZip));
         var tempStream = File.Open(tempZip, FileMode.Open, FileAccess.Read, FileShare.Read);
