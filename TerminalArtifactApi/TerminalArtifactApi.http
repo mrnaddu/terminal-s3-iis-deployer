@@ -1,6 +1,0 @@
-@TerminalArtifactApi_HostAddress = http://localhost:5189
-
-GET {{TerminalArtifactApi_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

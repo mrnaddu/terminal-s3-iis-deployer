@@ -18,25 +18,62 @@ Directory.CreateDirectory(localBackupDir);
 
 Log.Title("IIS Zip Deployer");
 
-// Resolve package zip path
+string PromptWithDefault(string label, string? current)
+{
+    Console.Write(string.IsNullOrWhiteSpace(current) || current.StartsWith("CHANGE_ME", StringComparison.OrdinalIgnoreCase)
+        ? $"{label}: "
+        : $"{label} [{current}]: ");
+    var input = Console.ReadLine()?.Trim('\"', ' ');
+    return string.IsNullOrEmpty(input) ? (current ?? string.Empty) : input!;
+}
+
+string PromptRequired(string label)
+{
+    while (true)
+    {
+        Console.Write($"{label}: ");
+        var input = Console.ReadLine()?.Trim('\"', ' ');
+        if (!string.IsNullOrWhiteSpace(input)) return input!;
+        Log.Warn("A value is required.");
+    }
+}
+
+// Allow adjusting IIS target interactively
+Log.Step("Configure IIS target");
+var prevSite = iisSiteName; var prevPath = iisPhysicalPath;
+iisSiteName = PromptWithDefault("IIS site name", iisSiteName);
+iisPhysicalPath = PromptWithDefault("IIS physical path", iisPhysicalPath);
+if (!string.Equals(prevSite, iisSiteName, StringComparison.Ordinal) || !string.Equals(prevPath, iisPhysicalPath, StringComparison.Ordinal))
+{
+    Log.Info($"Target set to site='{iisSiteName}', path='{iisPhysicalPath}'");
+}
+
+// Resolve package zip
 Log.Step("Resolve package zip");
 string? packageZipPath = null;
 
-// 1) Try Artifact API if configured
+// 1) Try Artifact API, allow filling via console
 var apiBase = config["ArtifactApi:BaseUrl"];
 var apiTerminalId = config["ArtifactApi:TerminalId"];
-var apiTag = config["ArtifactApi:Tag"];
-if (!string.IsNullOrWhiteSpace(apiBase) && !string.IsNullOrWhiteSpace(apiTerminalId) && !string.IsNullOrWhiteSpace(apiTag))
+var apiZipName = config["ArtifactApi:ZipName"] ?? config["ArtifactApi:Tag"]; // backward compatible
+
+// Always use Artifact API; BaseUrl can default, Terminal ID and Zip are required from console
+apiBase = PromptWithDefault("API BaseUrl", apiBase);
+apiTerminalId = PromptRequired("Terminal ID");
+apiZipName = PromptRequired("Zip name (without .zip okay)");
+
+if (!string.IsNullOrWhiteSpace(apiBase) && !string.IsNullOrWhiteSpace(apiTerminalId) && !string.IsNullOrWhiteSpace(apiZipName))
 {
     try
     {
-        var apiUrl = $"{apiBase.TrimEnd('/')}/artifacts/{apiTerminalId}/{apiTag}";
+        var apiUrl = $"{apiBase.TrimEnd('/')}/artifacts/{apiTerminalId}/{apiZipName}";
         Log.Info($"Downloading package from API: {apiUrl}");
         using var http = new HttpClient();
         using var resp = await http.GetAsync(apiUrl, HttpCompletionOption.ResponseHeadersRead);
         if (!resp.IsSuccessStatusCode)
         {
-            Log.Warn($"API returned {(int)resp.StatusCode} {resp.ReasonPhrase}. Falling back to local resolution.");
+            Log.Error($"API returned {(int)resp.StatusCode} {resp.ReasonPhrase}. Cannot continue.");
+            return;
         }
         else
         {
@@ -55,31 +92,11 @@ if (!string.IsNullOrWhiteSpace(apiBase) && !string.IsNullOrWhiteSpace(apiTermina
     }
 }
 
-// 2) If not from API, use configured or default local zips
+// Require package from API only
 if (packageZipPath is null)
 {
-    if (!string.IsNullOrWhiteSpace(localZipPath) && File.Exists(localZipPath))
-    {
-        packageZipPath = localZipPath;
-        Log.Info($"Using local zip: {packageZipPath}");
-    }
-    else if (File.Exists(Path.Combine("artifacts", "packages", "site.zip")))
-    {
-        packageZipPath = Path.Combine("artifacts", "packages", "site.zip");
-        Log.Info($"Using default local zip: {packageZipPath}");
-    }
-    else
-    {
-        Log.Step("No configured package found");
-        Console.Write("Enter path to package .zip: ");
-        var input = Console.ReadLine()?.Trim('"', ' ');
-        if (string.IsNullOrWhiteSpace(input) || !File.Exists(input))
-        {
-            Log.Error("Package zip not found.");
-            return;
-        }
-        packageZipPath = input;
-    }
+    Log.Error("Failed to obtain package from API. Aborting.");
+    return;
 }
 
 // Backup current IIS site content locally
