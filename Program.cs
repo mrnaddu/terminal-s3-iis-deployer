@@ -9,21 +9,12 @@ var config = new ConfigurationBuilder()
     .AddEnvironmentVariables()
     .Build();
 
-var localBackupDir = config["Deployment:LocalBackupDir"] ?? Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "backups");
+var localBackupDir = Path.Combine(Directory.GetCurrentDirectory(), "artifacts", "backups");
 Directory.CreateDirectory(localBackupDir);
 
 Log.Title("IIS Zip Deployer");
 
-string PromptWithDefault(string label, string? current)
-{
-    Console.Write(string.IsNullOrWhiteSpace(current) || current.StartsWith("CHANGE_ME", StringComparison.OrdinalIgnoreCase)
-        ? $"{label}: "
-        : $"{label} [{current}]: ");
-    var input = Console.ReadLine()?.Trim('\"', ' ');
-    return string.IsNullOrEmpty(input) ? (current ?? string.Empty) : input!;
-}
-
-string PromptRequired(string label)
+static string PromptRequired(string label)
 {
     while (true)
     {
@@ -37,7 +28,6 @@ string PromptRequired(string label)
 // Get deployment info from API
 Log.Step("Get deployment configuration from API");
 var apiBase = config["ArtifactApi:BaseUrl"];
-apiBase = PromptWithDefault("API BaseUrl", apiBase);
 var apiTerminalId = PromptRequired("Terminal ID");
 var apiZipName = PromptRequired("Zip name (without .zip okay)");
 
@@ -58,16 +48,16 @@ if (!string.IsNullOrWhiteSpace(apiBase) && !string.IsNullOrWhiteSpace(apiTermina
             Log.Error($"API returned {(int)resp.StatusCode} {resp.ReasonPhrase}. Cannot continue.");
             return;
         }
-        
+
         // Get IIS configuration from response headers
         if (resp.Headers.TryGetValues("X-IIS-SiteName", out var siteNameValues))
             iisSiteName = siteNameValues.FirstOrDefault();
         if (resp.Headers.TryGetValues("X-IIS-PhysicalPath", out var pathValues))
             iisPhysicalPath = pathValues.FirstOrDefault();
-            
+
         Log.Info($"IIS Site: {iisSiteName ?? "Not provided"}");
         Log.Info($"IIS Path: {iisPhysicalPath ?? "Not provided"}");
-        
+
         var tempZip = Path.Combine(Path.GetTempPath(), $"deployer_{Guid.NewGuid():N}.zip");
         await using (var fs = File.Create(tempZip))
         {
@@ -143,7 +133,6 @@ static void ZipDirectory(string sourceDir, string zipPath)
     if (File.Exists(zipPath)) File.Delete(zipPath);
     ZipFile.CreateFromDirectory(sourceDir, zipPath, CompressionLevel.Optimal, includeBaseDirectory: false);
 }
-
 
 static void DeployZip(string zipPath, string destDir)
 {
